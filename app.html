@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lib Downloader: формуляр глав</title>
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main class="sheet">
+    <header class="masthead">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="44" height="44" role="presentation">
+          <rect x="5" y="7" width="10" height="33" fill="currentColor"/>
+          <rect x="18" y="7" width="10" height="33" fill="currentColor" opacity=".52"/>
+          <rect x="31" y="7" width="12" height="33" fill="none" stroke="currentColor" stroke-width="2"/>
+          <rect x="31" y="14" width="12" height="7" fill="#A63D32"/>
+          <path d="M5 43h38" stroke="currentColor" stroke-width="2"/>
+        </svg>
+      </div>
+      <div class="masthead-copy">
+        <h1 class="wordmark">Lib Downloader</h1>
+        <p class="masthead-sub">Формуляр на выдачу глав MangaLib и SlashLib</p>
+      </div>
+      <a id="source-link" class="source-link" href="https://mangalib.me/" target="_blank" rel="noreferrer">Открыть MangaLib</a>
+    </header>
+
+    <div class="layout">
+      <aside class="rail" aria-label="Сведения о текущем формуляре">
+        <section class="rail-block">
+          <h2 class="rail-title">Сведения</h2>
+          <dl class="docket">
+            <div>
+              <dt>Сайт</dt>
+              <dd id="site-badge" class="pill" title="Определённый сайт и Site-Id">Сайт: не определён</dd>
+            </div>
+            <div>
+              <dt>API</dt>
+              <dd id="api-host" class="pill" title="Рабочий адрес API">API: не определён</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="rail-block">
+          <h2 class="rail-title">Порядок работы</h2>
+          <ol class="steps">
+            <li>Укажите тайтл</li>
+            <li>Отметьте главы</li>
+            <li>Получите один архив</li>
+          </ol>
+        </section>
+
+        <section class="rail-block rail-note">
+          <p>Архив появляется в конце. Если остановить загрузку, уже скачанные главы всё равно будут выданы отдельным частичным файлом.</p>
+        </section>
+      </aside>
+
+      <div class="main">
+        <section class="section source-section" aria-labelledby="source-heading">
+          <div class="section-head">
+            <div>
+              <h2 id="source-heading">Тайтл</h2>
+              <p class="muted">Откройте страницу манги или читалку и нажмите иконку расширения: ссылка подставится автоматически. Для голого slug выберите сайт в списке.</p>
+            </div>
+          </div>
+
+          <form id="source-form">
+            <label class="field-label" for="source-url">Ссылка или slug тайтла</label>
+            <div class="input-row">
+              <input id="source-url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+                     placeholder="https://mangalib.me/ru/7965--chainsaw-man или https://v2.shlib.life/ru/manga/87161--san-da">
+              <select id="site-select" aria-label="Сайт для голого slug">
+                <option value="auto">Сайт: авто</option>
+                <option value="manga">MangaLib</option>
+                <option value="slash">SlashLib</option>
+              </select>
+              <button id="load-btn" class="button primary" type="submit">Загрузить список</button>
+            </div>
+          </form>
+
+          <div id="status" class="status" role="status" aria-live="polite">Вставьте ссылку на тайтл MangaLib или SlashLib.</div>
+
+          <div id="title-card" class="title-docket" hidden>
+            <div class="title-copy">
+              <strong id="title-name">Не загружено</strong>
+              <span id="title-slug" class="muted">Не загружено</span>
+            </div>
+            <div class="title-meta">
+              <span id="chapter-count" class="pill">Глав: 0</span>
+              <span id="closed-count" class="pill warning" hidden>Закрыто: 0</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="suggestions" class="section" hidden aria-label="Похожие тайтлы"></section>
+
+        <section id="workspace" class="section" hidden aria-labelledby="chapters-heading">
+          <div class="section-head">
+            <div>
+              <h2 id="chapters-heading">Главы и настройки</h2>
+              <p class="muted">Shift + клик по чекбоксу выделяет диапазон. У глав с несколькими переводами есть выбор ветки.</p>
+            </div>
+            <span id="selected-count" class="selection-count">Выбрано: 0</span>
+          </div>
+
+          <div class="settings-grid">
+            <label class="field">
+              <span class="field-label">Формат</span>
+              <select id="format">
+                <option value="single-cbz-folders" selected>Один CBZ: папки по главам</option>
+                <option value="single-cbz">Один CBZ: сплошные страницы</option>
+                <option value="single-zip">Один ZIP: CBZ по главам</option>
+                <option value="cbz">CBZ: архив на главу</option>
+                <option value="images">Отдельные изображения</option>
+                <option value="both">CBZ + изображения</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Скорость</span>
+              <select id="speed">
+                <option value="gentle">Бережно (2 потока)</option>
+                <option value="normal" selected>Обычно (3 потока)</option>
+                <option value="fast">Быстро (5 потоков)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Папка в загрузках</span>
+              <input id="root-folder" type="text" value="MangaLib" autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <p class="muted archive-note">В режимах «Один …» все страницы собираются в памяти. Один файл появится в конце или сразу после «Остановить»: тогда будет отдан частичный архив из уже скачанного.</p>
+
+          <div class="chapter-toolbar">
+            <input id="filter" type="search" placeholder="Фильтр по номеру или названию" autocomplete="off">
+            <input id="range" type="text" placeholder="Диапазон: 1-10, 15, 20.5" autocomplete="off">
+            <button id="apply-range" class="button" type="button">Выделить</button>
+            <button id="select-all" class="button" type="button">Выбрать все</button>
+            <button id="select-none" class="button" type="button">Снять выделение</button>
+          </div>
+
+          <div id="chapter-list" class="chapter-list" role="list"></div>
+
+          <div class="action-bar">
+            <button id="start-btn" class="button primary" type="button">Скачать выбранные</button>
+            <button id="stop-btn" class="button danger" type="button" disabled>Остановить</button>
+            <button id="rules-btn" class="button subtle" type="button" title="Повторно применить заголовок Referer и доступ к серверам картинок">Обновить доступ</button>
+          </div>
+
+          <div id="progress" class="progress" hidden>
+            <div class="progress-row">
+              <span id="overall-text">Главы: 0 из 0</span>
+              <progress id="overall-progress" max="1" value="0"></progress>
+            </div>
+            <div class="progress-row">
+              <span id="current-text">Ожидание…</span>
+              <progress id="page-progress" max="1" value="0"></progress>
+            </div>
+          </div>
+
+          <ul id="log" class="log" aria-live="polite"></ul>
+        </section>
+
+        <details class="notes">
+          <summary>Как это работает и ограничения</summary>
+          <ul>
+            <li>Используется только публичный JSON API сети lib.social: список глав, страницы главы и список серверов изображений. Для MangaLib передаётся <code>Site-Id: 1</code>, для SlashLib <code>Site-Id: 2</code>.</li>
+            <li>Общий CBZ по умолчанию содержит папку на каждую главу, внутри страницы и <code>ComicInfo.xml</code> главы; в корне лежат общие <code>chapters.txt</code> и <code>ComicInfo.xml</code>.</li>
+            <li>Расширение не обходит вход в аккаунт, платный доступ, DRM, капчу или возрастные ограничения. Для части 18+ тайтлов оно использует уже имеющийся токен авторизации сайта; если API всё равно вернул 404, появятся похожие тайтлы из каталога.</li>
+            <li>Не закрывайте вкладку загрузчика до окончания. При первой пакетной загрузке Chrome может попросить разрешение на несколько файлов.</li>
+            <li>Если сайт изменит адрес API или CDN, проверьте запрос <code>.../chapter?number=…&amp;volume=…</code> на вкладке Network в DevTools и обновите константы в <code>app.js</code>.</li>
+          </ul>
+        </details>
+      </div>
+    </div>
+  </main>
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
