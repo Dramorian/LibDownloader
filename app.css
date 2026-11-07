@@ -16,6 +16,9 @@
   --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
   --display: "Unbounded", "IBM Plex Sans", sans-serif;
   --mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+  /* Сетка каталожной таблицы: одна и та же у шапки и у строк глав. */
+  --chapter-columns: 28px 108px minmax(100px, 1fr) minmax(140px, 240px) 76px;
+  --chapter-areas: "check num name branch badge";
 }
 
 * { box-sizing: border-box; }
@@ -237,12 +240,26 @@ select {
 .chapter-toolbar { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto auto; gap: 8px; align-items: center; margin-bottom: 14px; }
 .selection-count { font: 13px/1.4 var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
 
-.chapter-list { max-height: 420px; overflow: auto; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.chapter-head,
 .chapter-row {
   display: grid;
-  grid-template-columns: 28px 108px minmax(100px, 1fr) minmax(140px, 240px) 76px;
-  grid-template-areas: "check num name branch badge";
+  grid-template-columns: var(--chapter-columns);
+  grid-template-areas: var(--chapter-areas);
   gap: 12px;
+}
+.chapter-head {
+  align-items: start;
+  padding: 0 4px 7px;
+  color: var(--muted);
+  font: 12px/1.4 var(--mono);
+}
+.chapter-head > .head-check { grid-area: check; }
+.chapter-head > .head-num { grid-area: num; }
+.chapter-head > .head-name { grid-area: name; }
+.chapter-head > .head-branch { grid-area: branch; }
+.chapter-head > .head-badge { grid-area: badge; }
+.chapter-list { max-height: 420px; overflow: auto; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
+.chapter-row {
   align-items: center;
   min-height: 40px;
   padding: 6px 4px;
@@ -324,11 +341,12 @@ code { font: 12px/1.4 var(--mono); color: var(--ink); background: var(--blue-was
   .settings-grid { grid-template-columns: 1fr; }
   .input-row { grid-template-columns: 1fr; }
   .chapter-toolbar { grid-template-columns: 1fr 1fr; }
-  .chapter-row {
-    grid-template-columns: 26px 96px minmax(90px, 1fr) auto;
-    grid-template-areas: "check num name badge" "check num branch branch";
-    row-gap: 4px;
+  :root {
+    --chapter-columns: 26px 96px minmax(90px, 1fr) auto;
+    --chapter-areas: "check num name badge" "check num branch branch";
   }
+  .chapter-row { row-gap: 4px; }
+  .chapter-head { row-gap: 0; }
   .chapter-row select { min-height: 40px; }
   .progress-row { grid-template-columns: 1fr; gap: 4px; }
   .action-bar .subtle { margin-left: 0; }

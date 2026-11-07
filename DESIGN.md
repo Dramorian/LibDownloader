@@ -78,6 +78,7 @@ Browser surfaces are themed: `::selection`, caret, focus-visible ring, scrollbar
 - **Docket rail**: `<dl>` pairs for site/API and a real ordered list for the three actual steps. The steps are onboarding only and disappear once a title's chapters are loaded; the rail then carries data, not decoration.
 - **Status**: a receipt line with a small square indicator; error/success colour changes the text and dot, not a tinted card.
 - **Title docket**: bordered top/bottom line with title, slug, count stamps.
+- **Chapter head**: one register line above the list with the actual column names — «Том, глава», «Название», «Перевод», «Статус» — set in 12 px mono in `--muted`. It shares the row grid (`--chapter-columns` / `--chapter-areas`), so labels never drift from the data; on narrow screens it wraps to the same two-line rhythm as the rows. No uppercase, no counters, no zebra stripes.
 - **Chapter row**: catalogue entry, 40 px tall and clickable as a whole (the 16 px checkbox alone was the only hit area). Number is a spine-like tabular block; branch select is a plain underlined control, 34 px on desktop and 40 px on touch widths; closed rows are quieted in colour, stay in the list and keep their "закрыто" badge at full strength.
 - **Suggestions**: plain list of text buttons, no card grid.
 - **Progress**: two linear bars, cobalt fill, no gradient.
