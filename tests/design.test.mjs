@@ -25,7 +25,10 @@ test('redesign context and self-hosted fonts are present', () => {
   assert.match(fontCss, /IBM Plex Mono/);
   assert.doesNotMatch(fontCss, /https?:\/\//, 'шрифты не должны тянуться из сети');
   const urls = [...fontCss.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1].trim().replace(/^['"]|['"]$/g, ''));
-  assert.ok(urls.length >= 30, 'мало self-hosted подмножеств шрифтов');
+  assert.ok(urls.length >= 20, 'мало self-hosted подмножеств шрифтов');
+  for (const dead of ['vietnamese', 'cyrillic-ext']) {
+    assert.doesNotMatch(fontCss, new RegExp(dead), `лишнее подмножество ${dead} только увеличивает расширение`);
+  }
   for (const url of urls) {
     assert.doesNotMatch(url, /^(https?:|data:)/, `внешний ресурс шрифта ${url}`);
     assert.ok(exists(path.join('fonts', url)), `нет файла шрифта ${url}`);
@@ -48,8 +51,15 @@ test(' CSS avoids the banned AI-slop defaults', () => {
   assert.match(css, /font-family:\s*var\(--display\)/);
 });
 
-test(' craft floor: browser surfaces, motion and responsive states', () => {
+test(' craft floor: contrast, touch targets, motion and responsive states', () => {
   const css = read('app.css');
+  assert.match(css, /--muted-quiet:\s*#4E6472/);
+  assert.match(css, /\.chapter-row\.unavailable \.chapter-name/);
+  assert.doesNotMatch(css, /\.chapter-row\.unavailable\s*\{[^}]*opacity/, 'закрытые главы гасим цветом, а не прозрачностью');
+  assert.match(css, /min-height:\s*40px/, 'тач-таргеты не меньше 40px');
+  assert.match(css, /grid-template-areas: "check num name branch badge"/);
+  assert.match(css, /grid-template-areas: "check num name badge" "check num branch branch"/, 'мобильная строка — две строки, без висящего бейджа');
+  assert.doesNotMatch(css, /repeat\(auto-fill/, 'подсказки — список, а не сетка карточек');
   assert.match(css, /::selection/);
   assert.match(css, /caret-color/);
   assert.match(css, /:focus-visible/);
@@ -76,8 +86,16 @@ test(' markup has no template chrome or inline styles', () => {
 test(' design docs describe the committed world', () => {
   const design = read('DESIGN.md');
   const brief = read('SURFACE-BRIEF.md');
+  const product = read('PRODUCT.md');
   assert.match(design, /circulation slip|библиотеч/i);
   assert.match(design, /Operate|задач/i);
   assert.match(design, /anti-slop|AI defaults/i);
   assert.match(brief, /Operate/);
+  for (const doc of [design, product, brief]) {
+    assert.match(doc, /HentaiLib/, 'HentaiLib должен быть в описании продукта');
+  }
+  // Документация должна ссылаться на то, что действительно есть в репозитории.
+  assert.doesNotMatch(design, /preview\.html/, 'preview.html в репозитории нет');
+  assert.doesNotMatch(design, /npx impeccable/, 'проверку нельзя воспроизвести без зависимостей');
+  assert.match(design, /node --test tests\/\*\.test\.mjs/);
 });

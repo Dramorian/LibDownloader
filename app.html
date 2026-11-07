@@ -15,13 +15,13 @@
           <rect x="5" y="7" width="10" height="33" fill="currentColor"/>
           <rect x="18" y="7" width="10" height="33" fill="currentColor" opacity=".52"/>
           <rect x="31" y="7" width="12" height="33" fill="none" stroke="currentColor" stroke-width="2"/>
-          <rect x="31" y="14" width="12" height="7" fill="#A63D32"/>
+          <rect class="mark-accent" x="31" y="14" width="12" height="7" fill="currentColor"/>
           <path d="M5 43h38" stroke="currentColor" stroke-width="2"/>
         </svg>
       </div>
       <div class="masthead-copy">
         <h1 class="wordmark">Lib Downloader</h1>
-        <p class="masthead-sub">Формуляр на выдачу глав MangaLib и SlashLib</p>
+        <p class="masthead-sub">Формуляр на выдачу глав MangaLib, SlashLib и HentaiLib</p>
       </div>
       <a id="source-link" class="source-link" href="https://mangalib.me/" target="_blank" rel="noreferrer">Открыть MangaLib</a>
     </header>
@@ -42,17 +42,13 @@
           </dl>
         </section>
 
-        <section class="rail-block">
+        <section id="steps-block" class="rail-block">
           <h2 class="rail-title">Порядок работы</h2>
           <ol class="steps">
             <li>Укажите тайтл</li>
             <li>Отметьте главы</li>
             <li>Получите один архив</li>
           </ol>
-        </section>
-
-        <section class="rail-block rail-note">
-          <p>Архив появляется в конце. Если остановить загрузку, уже скачанные главы всё равно будут выданы отдельным частичным файлом.</p>
         </section>
       </aside>
 
@@ -61,25 +57,26 @@
           <div class="section-head">
             <div>
               <h2 id="source-heading">Тайтл</h2>
-              <p class="muted">Откройте страницу манги или читалку и нажмите иконку расширения: ссылка подставится автоматически. Для голого slug выберите сайт в списке.</p>
+              <p class="muted">Откройте страницу манги или читалку и нажмите иконку расширения: ссылка подставится автоматически. Можно вставить голый slug и выбрать сайт в списке.</p>
             </div>
           </div>
 
           <form id="source-form">
             <label class="field-label" for="source-url">Ссылка или slug тайтла</label>
             <div class="input-row">
-              <input id="source-url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-                     placeholder="https://mangalib.me/ru/7965--chainsaw-man или https://v2.shlib.life/ru/manga/87161--san-da">
+              <input id="source-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+                     placeholder="Ссылка на тайтл или slug, например 87161--san-da">
               <select id="site-select" aria-label="Сайт для голого slug">
                 <option value="auto">Сайт: авто</option>
                 <option value="manga">MangaLib</option>
                 <option value="slash">SlashLib</option>
+                <option value="hentai">HentaiLib</option>
               </select>
               <button id="load-btn" class="button primary" type="submit">Загрузить список</button>
             </div>
           </form>
 
-          <div id="status" class="status" role="status" aria-live="polite">Вставьте ссылку на тайтл MangaLib или SlashLib.</div>
+          <div id="status" class="status" role="status" aria-live="polite">Вставьте ссылку на тайтл MangaLib, SlashLib или HentaiLib.</div>
 
           <div id="title-card" class="title-docket" hidden>
             <div class="title-copy">
@@ -98,7 +95,7 @@
         <section id="workspace" class="section" hidden aria-labelledby="chapters-heading">
           <div class="section-head">
             <div>
-              <h2 id="chapters-heading">Главы и настройки</h2>
+              <h2 id="chapters-heading" tabindex="-1">Главы и настройки</h2>
               <p class="muted">Shift + клик по чекбоксу выделяет диапазон. У глав с несколькими переводами есть выбор ветки.</p>
             </div>
             <span id="selected-count" class="selection-count">Выбрано: 0</span>
@@ -132,17 +129,17 @@
           <p class="muted archive-note">В режимах «Один …» все страницы собираются в памяти. Один файл появится в конце или сразу после «Остановить»: тогда будет отдан частичный архив из уже скачанного.</p>
 
           <div class="chapter-toolbar">
-            <input id="filter" type="search" placeholder="Фильтр по номеру или названию" autocomplete="off">
-            <input id="range" type="text" placeholder="Диапазон: 1-10, 15, 20.5" autocomplete="off">
+            <input id="filter" type="search" aria-label="Фильтр по номеру или названию" placeholder="Фильтр по номеру или названию" autocomplete="off">
+            <input id="range" type="text" aria-label="Диапазон глав, например 1-10, 15, 20.5" placeholder="Диапазон: 1-10, 15, 20.5" autocomplete="off">
             <button id="apply-range" class="button" type="button">Выделить</button>
             <button id="select-all" class="button" type="button">Выбрать все</button>
             <button id="select-none" class="button" type="button">Снять выделение</button>
           </div>
 
-          <div id="chapter-list" class="chapter-list" role="list"></div>
+          <div id="chapter-list" class="chapter-list" role="list" aria-labelledby="chapters-heading"></div>
 
           <div class="action-bar">
-            <button id="start-btn" class="button primary" type="button">Скачать выбранные</button>
+            <button id="start-btn" class="button primary" type="button" disabled>Скачать выбранные</button>
             <button id="stop-btn" class="button danger" type="button" disabled>Остановить</button>
             <button id="rules-btn" class="button subtle" type="button" title="Повторно применить заголовок Referer и доступ к серверам картинок">Обновить доступ</button>
           </div>
@@ -150,11 +147,11 @@
           <div id="progress" class="progress" hidden>
             <div class="progress-row">
               <span id="overall-text">Главы: 0 из 0</span>
-              <progress id="overall-progress" max="1" value="0"></progress>
+              <progress id="overall-progress" max="1" value="0" aria-label="Прогресс по главам" aria-describedby="overall-text"></progress>
             </div>
             <div class="progress-row">
               <span id="current-text">Ожидание…</span>
-              <progress id="page-progress" max="1" value="0"></progress>
+              <progress id="page-progress" max="1" value="0" aria-label="Прогресс по страницам главы" aria-describedby="current-text"></progress>
             </div>
           </div>
 
@@ -164,9 +161,9 @@
         <details class="notes">
           <summary>Как это работает и ограничения</summary>
           <ul>
-            <li>Используется только публичный JSON API сети lib.social: список глав, страницы главы и список серверов изображений. Для MangaLib передаётся <code>Site-Id: 1</code>, для SlashLib <code>Site-Id: 2</code>.</li>
+            <li>Используется только публичный JSON API сети lib.social: список глав, страницы главы и список серверов изображений. Для MangaLib передаётся <code>Site-Id: 1</code>, для SlashLib <code>Site-Id: 2</code>, для HentaiLib <code>Site-Id: 4</code>.</li>
             <li>Общий CBZ по умолчанию содержит папку на каждую главу, внутри страницы и <code>ComicInfo.xml</code> главы; в корне лежат общие <code>chapters.txt</code> и <code>ComicInfo.xml</code>.</li>
-            <li>Расширение не обходит вход в аккаунт, платный доступ, DRM, капчу или возрастные ограничения. Для части 18+ тайтлов оно использует уже имеющийся токен авторизации сайта; если API всё равно вернул 404, появятся похожие тайтлы из каталога.</li>
+            <li>Расширение не обходит вход в аккаунт, платный доступ, DRM, капчу или возрастные ограничения. Для части 18+ тайтлов SlashLib и HentaiLib оно использует уже имеющийся токен авторизации сайта и отправляет его только на API-хосты профиля; если API всё равно вернул 404, появятся похожие тайтлы из каталога.</li>
             <li>Не закрывайте вкладку загрузчика до окончания. При первой пакетной загрузке Chrome может попросить разрешение на несколько файлов.</li>
             <li>Если сайт изменит адрес API или CDN, проверьте запрос <code>.../chapter?number=…&amp;volume=…</code> на вкладке Network в DevTools и обновите константы в <code>app.js</code>.</li>
           </ul>

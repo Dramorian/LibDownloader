@@ -4,29 +4,36 @@
  * Referer нельзя выставить обычным fetch(), поэтому используется правило DNR.
  * Правило ограничено запросами самого расширения и вкладок поддерживаемых сайтов
  * к известным API/CDN. Страница загрузчика уточняет правило под конкретный сайт.
+ *
+ * Списки доменов берутся из core.js, а не дублируются: модульный service worker
+ * импортирует тот же файл, что и страница (он сам публикует globalThis.MLCore).
  */
 'use strict';
 
+import './core.js';
+
+const C = globalThis.MLCore;
+if (!C) throw new Error('core.js не загружен');
+
 const RULE_ID = 1;
 const REFERER = 'https://mangalib.me/';
-const REQUEST_DOMAINS = [
-  'api.cdnlibs.org', 'cdnlibs.org',
-  'api.lib.social', 'lib.social',
-  'api2.mangalib.me', 'mangalib.me', 'mangalib.org',
-  'imglib.info', 'cdnrulib.link',
-  'api.shlib.life', 'shlib.life',
-  'hapi.hentaicdn.org', 'hentaicdn.org',
-  'img2.hentaicdn.org', 'img3.hentaicdn.org',
-  'yaoilib.net', 'slashlib.me', 'slashlib.org',
-];
-const INITIATOR_DOMAINS = [
-  chrome.runtime.id,
-  'mangalib.me', 'www.mangalib.me', 'mangalib.org', 'www.mangalib.org',
-  'shlib.life', 'v2.shlib.life', 'www.shlib.life', 'v1.shlib.life',
-  'yaoilib.net', 'v1.yaoilib.net', 'www.yaoilib.net',
-  'slashlib.me', 'www.slashlib.me', 'slashlib.org', 'www.slashlib.org',
-];
-const SITE_HOST = /(?:^|\.)(?:mangalib\.(?:me|org)|shlib\.life|yaoilib\.net|slashlib\.(?:me|org))$/i;
+
+function hostsFromUrls(values) {
+  return values
+    .map((value) => {
+      try { return new URL(value).hostname; } catch (_) { return null; }
+    })
+    .filter(Boolean);
+}
+
+const REQUEST_DOMAINS = [...new Set([
+  ...C.SITE_DNR_DOMAINS,
+  ...hostsFromUrls(Object.values(C.SITE_PROFILES).flatMap((site) => [...site.apiBases, ...site.fallbackServers])),
+])];
+
+const INITIATOR_DOMAINS = [chrome.runtime.id, ...C.SITE_INITIATOR_DOMAINS];
+
+const SITE_HOST = /(?:^|\.)(?:mangalib\.(?:me|org)|shlib\.life|yaoilib\.net|slashlib\.(?:me|org)|hentailib\.(?:me|org))$/i;
 
 function buildRule(referer, requestDomains) {
   return {

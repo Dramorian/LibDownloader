@@ -2,11 +2,11 @@
 
 ## What it is
 
-A Chrome MV3 extension that turns publicly visible chapters from MangaLib and SlashLib into one local archive. It is a task tool, not a marketing site: the visitor opens it from a title/reader tab, picks chapters, and waits for one download.
+A Chrome MV3 extension that turns publicly visible chapters from MangaLib, SlashLib and HentaiLib into one local archive. It is a task tool, not a marketing site: the visitor opens it from a title/reader tab, picks chapters, and waits for one download.
 
 ## Audience and real scene
 
-A person already browsing `mangalib.me` or `v2.shlib.life` in Chrome. They may have dozens of tabs open, may stop a long download halfway, and want a file they can file away or open in a CBZ reader. They care about chapter boundaries, not dashboard decoration.
+A person already browsing `mangalib.me`, `v2.shlib.life` or `hentailib.me` in Chrome. They may have dozens of tabs open, may stop a long download halfway, and want a file they can file away or open in a CBZ reader. They care about chapter boundaries, not dashboard decoration.
 
 ## Primary job
 
@@ -21,7 +21,8 @@ Impeccable would call this an **Operate** surface. Important states:
 - downloading, with overall and per-page progress;
 - stopped, with a partial archive;
 - error: 404, restricted/18+, network, CDN;
-- suggestions when the exact title is unavailable.
+- suggestions when the exact title is unavailable;
+- the same flow on three sites that share one API and differ only by `Site-Id` (1 / 2 / 4).
 
 ## Must remain untouched
 
