@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Lib Downloader — MangaLib / SlashLib",
+  "name": "Lib Downloader — MangaLib / SlashLib / HentaiLib",
   "short_name": "Lib DL",
-  "version": "1.6.0",
-  "description": "Скачивает общедоступные главы MangaLib/SlashLib одним архивом. Интерфейс — библиотечный формуляр, без внешних ресурсов.",
+  "version": "1.7.0",
+  "description": "Скачивает общедоступные главы MangaLib, SlashLib и HentaiLib одним архивом. Интерфейс — библиотечный формуляр, без внешних ресурсов.",
   "minimum_chrome_version": "116",
   "action": {
     "default_title": "Скачать главы с MangaLib / SlashLib",
@@ -21,14 +21,16 @@
     "128": "icons/icon128.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "permissions": [
     "downloads",
     "scripting",
     "tabs",
     "activeTab",
-    "declarativeNetRequestWithHostAccess"
+    "declarativeNetRequestWithHostAccess",
+    "storage"
   ],
   "host_permissions": [
     "https://mangalib.me/*",
@@ -47,6 +49,10 @@
     "https://*.lib.social/*",
     "https://*.imglib.info/*",
     "https://*.cdnrulib.link/*",
+    "https://hentailib.me/*",
+    "https://*.hentailib.me/*",
+    "https://hentailib.org/*",
+    "https://*.hentailib.org/*",
     "https://*.hentaicdn.org/*"
   ],
   "optional_host_permissions": [

@@ -237,3 +237,122 @@ test('buildZip создаёт читаемый STORED-архив с UTF-8 име
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('HentaiLib: профиль, Site-Id 4, origin и заголовки с токеном', () => {
+  const site = C.detectSite('https://hentailib.me/ru/manga/123--title');
+  assert.equal(site.key, 'hentai');
+  assert.equal(site.siteId, '4');
+  assert.equal(site.name, 'HentaiLib');
+  assert.equal(C.parseSlug('https://hentailib.me/ru/manga/123--title'), '123--title');
+  assert.equal(C.parseSlug('https://www.hentailib.org/ru/123--title/read/v1/c2'), '123--title');
+  assert.equal(C.originFrom('https://hentailib.me/ru/123--title'), 'https://hentailib.me');
+  assert.ok(C.isSupportedHost('hentailib.me'));
+  assert.ok(C.isSupportedHost('kz.hentailib.me'));
+  assert.equal(C.isSupportedHost('hentailib.example'), false);
+  assert.equal(C.profileBySiteId('4').rootFolder, 'HentaiLib');
+  assert.equal(C.profileBySiteId('3'), null);
+  assert.deepEqual(C.SITE_NAMES[4], 'HentaiLib');
+  assert.ok(C.SITE_INITIATOR_DOMAINS.includes('hentailib.me'));
+  assert.ok(C.SITE_DNR_DOMAINS.includes('hentailib.me'));
+  assert.ok(site.apiBases.includes('https://api.cdnlibs.org/api'));
+
+  const authHosts = site.authHosts;
+  const allowed = C.buildApiHeaders({ siteId: '4', token: 'secret-token-1234567890', url: 'https://api.cdnlibs.org/api/manga/x', authHosts });
+  assert.equal(allowed.Authorization, 'Bearer secret-token-1234567890');
+  assert.equal(allowed['Site-Id'], '4');
+  assert.equal(allowed.Accept, 'application/json');
+  // Запасные CDN и чужие API токен не получают — он уходил туда при первом же сбое.
+  for (const url of ['https://hapi.hentaicdn.org/api/x', 'https://img3.hentaicdn.org/x.jpg', 'https://api2.mangalib.me/api/x']) {
+    assert.equal(C.buildApiHeaders({ siteId: '4', token: 'secret', url, authHosts }).Authorization, undefined, url);
+  }
+  assert.equal(C.buildApiHeaders({ siteId: '1', token: '', url: 'https://api.lib.social/api/x', authHosts: ['api.lib.social'] }).Authorization, undefined);
+});
+
+test('метки глав без тома и служебные значения', () => {
+  assert.equal(C.padNumber('', 2), '');
+  assert.equal(C.padNumber(null, 2), '');
+  assert.equal(C.padNumber('7', 2), '07');
+  assert.equal(C.chapterLabel({ volume: '', number: '1' }), 'гл0001');
+  assert.equal(C.chapterLabel({ volume: '2', number: '15.5' }), 'т02 гл0015.5');
+  assert.match(C.buildComicInfo({ pageCount: 1 }), /<Title>Глава<\/Title>/);
+  assert.doesNotMatch(C.buildComicInfo({ pageCount: 1 }), /undefined/);
+});
+
+test('parseSlug отклоняет не-HTTP схемы', () => {
+  assert.equal(C.parseSlug('javascript:alert(1)'), null);
+  assert.equal(C.parseSlug('data:text/html,<b>x</b>'), null);
+  assert.equal(C.parseSlug('ftp://mangalib.me/ru/1--x'), null);
+  assert.equal(C.parseSlug('https://example.com/1--x'), null);
+  assert.equal(C.parseSlug('1--x'), '1--x');
+});
+
+test('ZIP: части, лимит записей и вложенные имена', () => {
+  const parts = C.buildZipParts([
+    { name: '001.jpg', data: new Uint8Array([1, 2, 3]) },
+    { name: 'ComicInfo.xml', data: '<ComicInfo/>' },
+  ]);
+  assert.ok(Array.isArray(parts) && parts.length >= 6);
+  assert.throws(() => C.buildZipBytes(new Array(C.ZIP_MAX_ENTRIES + 1).fill({ name: 'a', data: 'x' })), /Слишком много файлов/);
+  const used = new Set();
+  assert.equal(C.uniqueEntryName('глава.cbz', used), 'глава.cbz');
+  assert.equal(C.uniqueEntryName('глава.cbz', used), 'глава (2).cbz');
+  assert.equal(C.uniqueEntryName('глава.cbz', used), 'глава (3).cbz');
+});
+
+test('архивы: папки по главам, плоский, вложенные CBZ и частичная глава', async () => {
+  const page = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+  const chapter = (number, partial) => ({
+    files: [{ name: '001.jpg', ext: 'jpg', bytes: page }, { name: '002.jpg', ext: 'jpg', bytes: page }],
+    label: C.chapterLabel({ volume: '1', number }),
+    base: `Test - ${C.chapterLabel({ volume: '1', number })}${partial ? ' - неполная' : ''}`,
+    root: 'HentaiLib',
+    series: 'Test',
+    chapter: { volume: '1', number },
+    branchLabel: 'Team',
+    chapterName: `Глава ${number}`,
+    source: 'https://hentailib.me/ru/manga/1--test',
+    partial: !!partial,
+  });
+  const chapters = [chapter('1'), chapter('2', true)];
+  const range = C.batchRangeLabel(chapters);
+  assert.match(range, /гл0001–т01 гл0002 \(2 глав\)/);
+
+  const cases = {
+    folded: C.folderedArchiveEntries(chapters, 'Test', range, { stopped: true }),
+    flat: C.flatArchiveEntries(chapters, 'Test', range, { stopped: true }),
+    nested: C.nestedArchiveEntries(chapters, 'Test', range, { stopped: true }),
+  };
+  assert.ok(cases.folded.some((f) => f.name === 'ComicInfo.xml'));
+  assert.ok(cases.folded.some((f) => /^001 - .*001\.jpg$/.test(f.name)));
+  assert.ok(cases.folded.some((f) => /неполная\/002\.jpg$/.test(f.name)));
+  assert.ok(cases.flat.some((f) => f.name === '0003.jpg'), 'плоский архив нумерует страницы сквозняком');
+  assert.ok(cases.nested.every((f) => f.name !== 'undefined.cbz'));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ml-archives-'));
+  try {
+    for (const [name, entries] of Object.entries(cases)) {
+      const file = path.join(dir, `${name}.zip`);
+      fs.writeFileSync(file, C.buildZipBytes(entries));
+      const out = (await import('node:child_process')).execFileSync('python3', [
+        '-c',
+        'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(len(z.namelist())); print(z.read("chapters.txt").decode())',
+        file,
+      ], { encoding: 'utf8' });
+      assert.match(out, /НЕПОЛНАЯ/, `${name}: неполная глава помечена в chapters.txt`);
+      assert.match(out, /Остановлено: да/, `${name}: остановка помечена`);
+      if (name === 'nested') {
+        const inner = C.buildZipBytes(C.chapterZipFiles(chapters[0]));
+        fs.writeFileSync(path.join(dir, 'inner.cbz'), inner);
+        const innerOut = (await import('node:child_process')).execFileSync('python3', [
+          '-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(",".join(z.namelist()))',
+          path.join(dir, 'inner.cbz'),
+        ], { encoding: 'utf8' });
+        assert.match(innerOut, /001\.jpg,002\.jpg,ComicInfo\.xml/);
+      }
+    }
+  } catch (err) {
+    if (err && err.status !== 127) throw err;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

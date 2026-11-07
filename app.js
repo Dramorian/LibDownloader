@@ -27,6 +27,7 @@ const state = {
   siteName: initialSite.name,
   origin: initialSite.defaultOrigin,
   rootFolder: initialSite.rootFolder,
+  authHosts: [...initialSite.authHosts],
   apiBases: [...initialSite.apiBases],
   fallbackServers: [...initialSite.fallbackServers],
   slug: '',
@@ -43,18 +44,20 @@ const state = {
   lastCheckedState: true,
   readTarget: null,
   loadId: 0,
+  // Папку пользователя не перезаписываем при смене тайтла/сайта.
+  rootEdited: false,
+  settingsLoaded: false,
 };
 
-function makeApiHeaders(siteId) {
-  const headers = { Accept: 'application/json', 'Site-Id': String(siteId ?? state.siteId) };
-  // Некоторые 18+ тайтлы доступны только авторизованному пользователю.
-  // Токен читается из localStorage открытой вкладки сайта и никуда не сохраняется.
-  if (state.authToken) headers.Authorization = `Bearer ${state.authToken}`;
-  return headers;
-}
-
-function apiHeaders() {
-  return makeApiHeaders(state.siteId);
+// Заголовки собирает core.js: токен читается из localStorage вкладки сайта,
+// не сохраняется и уходит только на хосты профиля (authHosts), а не на каждый CDN.
+function apiHeadersFor(url, siteId) {
+  return C.buildApiHeaders({
+    siteId: siteId != null ? siteId : state.siteId,
+    token: state.authToken,
+    url,
+    authHosts: state.authHosts,
+  });
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -65,6 +68,7 @@ const dom = {
   siteSelect: $('#site-select'),
   load: $('#load-btn'),
   status: $('#status'),
+  stepsBlock: $('#steps-block'),
   siteBadge: $('#site-badge'),
   apiHost: $('#api-host'),
   sourceLink: $('#source-link'),
@@ -167,6 +171,16 @@ function titleFromSlug(slug) {
   return words ? words.replace(/\b\p{L}/gu, (ch) => ch.toUpperCase()) : slug;
 }
 
+// «Скачать» активна только когда есть что скачивать: пустой список глав раньше
+// оставлял рабочую область с живой кнопкой, которая сразу ругалась.
+function updateStartState() {
+  const selectable = $$('.chapter-check').some((checkbox) => !checkbox.disabled);
+  dom.start.disabled = state.running || !selectable;
+  dom.stop.disabled = !state.running;
+  // «Порядок работы» — онбординг для пустого формуляра, после загрузки он лишний.
+  dom.stepsBlock.hidden = state.chapters.length > 0;
+}
+
 function updateApiHost() {
   if (!state.apiBase) {
     dom.apiHost.textContent = 'API: —';
@@ -205,6 +219,7 @@ function setRunning(running) {
   dom.speed.disabled = running;
   dom.root.disabled = running;
   dom.progress.hidden = !running;
+  updateStartState();
 }
 
 // ---------- Доступы и Referer ----------
@@ -269,8 +284,31 @@ function requestHostAccess() {
     if (!granted) throw new Error('Нужно разрешить доступ к API и серверам изображений.');
     return true;
   });
-  // Чтобы отклонение не стало unhandled rejection, если доступ запрашивали кнопкой "Обновить CDN".
+  // Чтобы отклонение не стало unhandled rejection, если доступ запрашивали кнопкой "Обновить доступ".
   state.accessPromise.catch(() => {});
+}
+
+// Какие из нужных origin ещё не выданы. Список серверов меняется после /constants,
+// поэтому проверять его нужно заново перед скачиванием, а не только по клику.
+async function missingOrigins() {
+  if (!chrome.permissions || !chrome.permissions.contains) return [];
+  const origins = allOrigins();
+  const missing = [];
+  for (const origin of origins) {
+    try {
+      const granted = await chrome.permissions.contains({ origins: [origin] });
+      if (!granted) missing.push(origin);
+    } catch (_) { /* проверка недоступна — считаем, что доступ есть */ }
+  }
+  return missing;
+}
+
+// Без user gesture запрос прав не покажется, поэтому здесь только диагностика.
+async function checkHostAccess() {
+  const missing = await missingOrigins();
+  if (!missing.length) return true;
+  addLog(`Нет доступа к ${missing.join(', ')}. Нажмите «Обновить доступ», иначе часть страниц пойдёт через вкладку сайта.`, 'err');
+  return false;
 }
 
 // ---------- HTTP ----------
@@ -281,8 +319,16 @@ function retryableStatus(status) {
 
 function retryAfterFrom(response) {
   const raw = response && response.headers && response.headers.get('Retry-After');
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? Math.min(60, value) : 0;
+  if (!raw) return 0;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(60, seconds);
+  // HTTP-дата: Retry-After: Wed, 21 Oct 2026 07:28:00 GMT
+  const date = Date.parse(raw);
+  if (Number.isFinite(date)) {
+    const wait = Math.ceil((date - Date.now()) / 1000);
+    if (wait > 0) return Math.min(60, wait);
+  }
+  return 0;
 }
 
 async function readJsonResponse(response) {
@@ -324,7 +370,7 @@ async function withRetry(label, operation, signal, maxRetries) {
 async function fetchJsonDirect(url, signal, headers) {
   const response = await fetch(url, {
     method: 'GET',
-    headers: headers || apiHeaders(),
+    headers: headers || apiHeadersFor(url),
     // Публичные главы не требуют cookies; если нужен авторизованный контекст,
     // apiGet повторит запрос из вкладки нужного сайта с credentials:'include'.
     credentials: 'omit',
@@ -439,13 +485,16 @@ async function readPageContext() {
       state.authToken = context.authToken;
       addLog('Найдена авторизация сайта: для API будет использован Bearer-токен.', 'info');
     }
-  } catch (_) { /* остаётся Site-Id из профиля, токен необязателен */ }
+  } catch (err) {
+    // Молчаливый catch скрывал отсутствие host-permission и закрытую вкладку.
+    addLog(`Контекст вкладки не прочитан (${humanError(err)}). Остаётся Site-Id профиля, токен необязателен.`, 'info');
+  }
 }
 
 async function runInSourceTab(func, args, world) {
   const tabId = await findSourceTab();
   if (tabId == null) {
-    throw new Error('Нет открытой вкладки нужного сайта для запасного запроса. Откройте тайтл на MangaLib/SlashLib и запустите расширение снова.');
+    throw new Error('Нет открытой вкладки нужного сайта для запасного запроса. Откройте тайтл на MangaLib, SlashLib или HentaiLib и запустите расширение снова.');
   }
   const options = { target: { tabId }, func, args };
   if (world) options.world = world;
@@ -510,7 +559,7 @@ async function fetchJsonInPage(url, signal, headers) {
     } finally {
       clearTimeout(timer);
     }
-  }, [url, headers || apiHeaders()]);
+  }, [url, headers || apiHeadersFor(url)]);
   if (signal && signal.aborted) throw abortError();
   if (!result || !result.ok) {
     throw new ApiError(
@@ -528,7 +577,6 @@ async function fetchJsonInPage(url, signal, headers) {
 
 async function apiGet(path, signal, options = {}) {
   const siteId = options.siteId != null ? options.siteId : state.siteId;
-  const headers = makeApiHeaders(siteId);
   const bases = options.bases && options.bases.length
     ? [...options.bases]
     : (state.apiBase
@@ -536,10 +584,14 @@ async function apiGet(path, signal, options = {}) {
       : [...state.apiBases]);
   const usePage = options.usePage !== false;
   const errors = [];
+  let directAttempts = 0;
+  let directAll404 = true;
 
   for (const base of bases) {
     const url = base + path;
     const host = (() => { try { return new URL(base).hostname; } catch (_) { return base; } })();
+    // Заголовки считаются для конкретного URL: токен не уходит на запасные хосты.
+    const headers = apiHeadersFor(url, siteId);
     try {
       const data = await withRetry(`API ${host}`, () => fetchJsonDirect(url, signal, headers), signal, 2);
       state.apiBase = base;
@@ -548,6 +600,8 @@ async function apiGet(path, signal, options = {}) {
     } catch (err) {
       if (isAbort(err)) throw err;
       errors.push(`${host}: ${humanError(err)}`);
+      directAttempts += 1;
+      if (err.status !== 404) directAll404 = false;
       if (!usePage) continue;
       try {
         const data = await fetchJsonInPage(url, signal, headers);
@@ -562,7 +616,10 @@ async function apiGet(path, signal, options = {}) {
     }
   }
   const tail = errors.slice(0, 4).join(' | ');
-  const all404 = errors.length > 0 && errors.every((line) => /\(HTTP 404\)|Not Found/i.test(line));
+  // 404 определяют только прямые ответы API. Ошибка запасного запроса через вкладку
+  // (нет вкладки, таймаут, CORS) не должна превращать 404 в «API недоступен»
+  // и отменять перебор соседних Site-Id.
+  const all404 = directAttempts > 0 && directAll404;
   const message = all404
     ? `Тайтл не найден в публичном API (404). ${tail}. Проверьте Site-Id, авторизацию на 18+ тайтлах и саму ссылку.`
     : `API недоступен. ${tail}. Проверьте ссылку и держите вкладку ${state.siteName} открытой.`;
@@ -603,6 +660,34 @@ async function loadImageServers(signal) {
   return state.servers;
 }
 
+// ---------- Профиль сайта ----------
+
+// Переключает профиль целиком: Site-Id без origin/CDN/Referer приводил к тому,
+// что список глав грузился, а страницы искались на CDN чужого сайта.
+function applySite(site) {
+  if (!site) return;
+  state.site = site;
+  state.siteKey = site.key;
+  state.siteId = site.siteId;
+  state.siteName = site.name;
+  state.authHosts = [...site.authHosts];
+  state.apiBases = [...site.apiBases];
+  state.fallbackServers = [...site.fallbackServers];
+  state.servers = [...site.fallbackServers];
+  state.serversLoaded = false;
+  state.apiBase = null;
+  state.origin = site.defaultOrigin;
+  state.rootFolder = site.rootFolder;
+  // Вкладка-мост обязана быть вкладкой нового сайта, иначе из неё уйдут чужие cookies.
+  state.bridgeTabId = null;
+  state.bridgeUnavailable = false;
+  dom.sourceLink.href = `${state.origin}/`;
+  dom.sourceLink.textContent = `Открыть ${state.siteName}`;
+  if (!state.rootEdited) dom.root.value = state.rootFolder;
+  updateSiteBadge();
+  updateApiHost();
+}
+
 // ---------- Восстановление после 404 ----------
 
 async function fetchChaptersWithFallback(slug, signal) {
@@ -612,22 +697,20 @@ async function fetchChaptersWithFallback(slug, signal) {
   } catch (err) {
     if (!err.notFound || isAbort(err)) throw err;
     // Один и тот же slug иногда встречается на другом сайте сети lib.social.
-    for (const siteId of ['1', '2', '3', '4', '5']) {
+    // Перебираем только сайты, для которых есть профиль чтения глав.
+    for (const siteId of ['1', '2', '4']) {
       if (siteId === String(state.siteId)) continue;
       try {
-        const json = await apiGet(path, signal, {
-          siteId,
-          bases: [state.apiBases[0]],
-          usePage: false,
-        });
-        state.siteId = siteId;
-        state.siteName = C.SITE_NAMES[siteId] || state.siteName;
-        updateSiteBadge();
-        addLog(`Тайтл найден с Site-Id ${siteId}; контекст API переключён.`, 'info');
+        const json = await apiGet(path, signal, { siteId, usePage: false });
+        const site = C.profileBySiteId(siteId);
+        if (!site) continue;
+        applySite(site);
+        addLog(`Тайтл найден с Site-Id ${siteId} (${site.name}); профиль переключён.`, 'info');
         return json;
       } catch (altErr) {
         if (isAbort(altErr)) throw altErr;
-        if (!altErr.notFound) throw altErr;
+        // Ошибка чужого сайта не должна подменять исходный 404.
+        addLog(`Site-Id ${siteId}: ${humanError(altErr)}`, 'info');
       }
     }
     throw err;
@@ -641,10 +724,7 @@ async function searchTitleCandidates(slug) {
     const path = `/manga?q=${encodeURIComponent(query)}`
       + '&site_id[]=1&site_id[]=2&site_id[]=3&site_id[]=4&site_id[]=5';
     try {
-      const json = await apiGet(path, undefined, {
-        bases: [state.apiBases[0]],
-        usePage: true,
-      });
+      const json = await apiGet(path);
       const list = json && Array.isArray(json.data) ? json.data : [];
       for (const item of list) {
         if (item && item.slug_url && !bySlug.has(item.slug_url)) bySlug.set(item.slug_url, item);
@@ -673,7 +753,7 @@ function renderSuggestions(candidates, slug) {
   const note = document.createElement('p');
   note.className = 'muted';
   note.textContent = exact
-    ? 'Точный тайтл найден в каталоге, но публичный API не отдаёт его главы. Для 18+ тайтлов SlashLib нужна авторизация на сайте; иначе главы могут быть закрыты.'
+    ? 'Точный тайтл найден в каталоге, но публичный API не отдаёт его главы. Для 18+ тайтлов SlashLib и HentaiLib нужна авторизация на сайте; иначе главы могут быть закрыты.'
     : 'Возможно, ссылка устарела или ведёт на тайтл другого сайта сети. Выберите подходящий вариант ниже.';
   box.append(title, note);
 
@@ -702,14 +782,14 @@ function renderSuggestions(candidates, slug) {
     metaParts.push(item.slug_url);
     meta.textContent = metaParts.join(', ');
     button.append(name, meta);
-    const supported = Number(item.site) === 1 || Number(item.site) === 2;
-    if (!supported) {
+    const site = C.profileBySiteId(item.site);
+    if (!site) {
       button.disabled = true;
       button.title = 'Этот сайт сети пока не поддерживается расширением';
       meta.textContent += ', не поддерживается';
     } else {
       button.addEventListener('click', () => {
-        dom.siteSelect.value = Number(item.site) === 1 ? 'manga' : 'slash';
+        dom.siteSelect.value = site.key;
         dom.url.value = item.slug_url;
         loadTitle(item.slug_url);
       });
@@ -740,7 +820,7 @@ async function fetchBinaryDirect(url, signal) {
     method: 'GET',
     headers: { Accept: 'image/*' },
     credentials: 'omit',
-    cache: 'force-cache',
+    cache: 'default',
     signal,
   });
   const type = response.headers.get('content-type') || '';
@@ -772,7 +852,7 @@ async function fetchBinaryInPage(url, signal) {
         method: 'GET',
         headers: { Accept: 'image/*' },
         credentials: 'omit',
-        cache: 'force-cache',
+        cache: 'default',
         signal: controller.signal,
       });
       if (!response.ok) return { ok: false, status: response.status, message: `HTTP ${response.status}` };
@@ -871,44 +951,13 @@ function saveBlob(blob, filename) {
         }
       };
       chrome.downloads.onChanged.addListener(listener);
-      // Если событие состояния потеряно, не держим promise вечно.
-      timer = setTimeout(() => finish(null, downloadId), 60000);
+      // Если событие состояния потеряно, не держим promise вечно — но и не врём
+      // «Готово»: Blob-URL остаётся живым, а статус говорит, что файл не подтверждён.
+      timer = setTimeout(() => {
+        finish(new Error('Chrome не подтвердил сохранение файла за 60 секунд. Проверьте папку загрузок.'), downloadId);
+      }, 60000);
     });
   });
-}
-
-function sortedPages(pages) {
-  return pages.map((page, index) => ({ page, index })).sort((a, b) => {
-    const an = Number(a.page.slug);
-    const bn = Number(b.page.slug);
-    if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
-    return a.index - b.index;
-  }).map((entry) => entry.page);
-}
-
-function chapterZipFiles(chapterData) {
-  const files = chapterData.files.map((file) => ({ name: file.name, data: file.bytes }));
-  files.push({
-    name: 'ComicInfo.xml',
-    data: new TextEncoder().encode(C.buildComicInfo({
-      chapterName: chapterData.partial ? `${chapterData.chapterName} (неполная)` : chapterData.chapterName,
-      series: chapterData.series,
-      volume: chapterData.chapter.volume,
-      chapterNumber: chapterData.chapter.number,
-      translation: chapterData.branchLabel,
-      pageCount: chapterData.files.length,
-      source: chapterData.source,
-    })),
-  });
-  return files;
-}
-
-function reindexFiles(files) {
-  const width = Math.max(3, String(files.length).length);
-  return files.map((file, index) => ({
-    ...file,
-    name: `${String(index + 1).padStart(width, '0')}.${file.ext}`,
-  }));
 }
 
 function makeChapterData(parts) {
@@ -932,12 +981,14 @@ function makeChapterData(parts) {
 async function collectChapterFiles(item, options, signal, onPage) {
   const { chapter, branchId, branchLabel } = item;
   const label = C.chapterLabel(chapter);
-  const query = new URLSearchParams({ number: chapter.number, volume: chapter.volume });
+  const query = new URLSearchParams({ number: chapter.number });
+  // volume= у глав без тома API иногда читает как «том 0» и отвечает 404.
+  if (String(chapter.volume || '').trim() !== '') query.set('volume', String(chapter.volume));
   if (branchId) query.set('branch_id', String(branchId));
   const json = await apiGet(`/manga/${encodeURIComponent(state.slug)}/chapter?${query}`, signal);
   const data = json && json.data ? json.data : {};
   const restricted = data.restricted_view;
-  const pages = Array.isArray(data.pages) ? sortedPages(data.pages.slice()) : [];
+  const pages = Array.isArray(data.pages) ? C.sortedPages(data.pages.slice()) : [];
   if (!pages.length) {
     if (restricted && restricted.is_open === false) {
       throw new Error('Доступ закрыт: глава платная или находится в раннем доступе.');
@@ -953,7 +1004,7 @@ async function collectChapterFiles(item, options, signal, onPage) {
     const partialFiles = files.filter(Boolean);
     if (partialFiles.length) {
       err.partialChapterData = makeChapterData({
-        files: reindexFiles(partialFiles),
+        files: C.reindexFiles(partialFiles),
         label,
         chapter,
         branchLabel,
@@ -1026,142 +1077,18 @@ async function downloadChapter(item, options, signal, onPage) {
     }
   }
   if (format === 'cbz' || format === 'both') {
-    await saveBlob(C.buildZip(chapterZipFiles(collected)), `${root}/${series}/${base}.cbz`);
+    await saveBlob(C.buildZip(C.chapterZipFiles(collected)), `${root}/${series}/${base}.cbz`);
   }
   return files.length;
 }
 
 // ---------- Один общий архив ----------
 
-function batchRangeLabel(chapters) {
-  const first = chapters[0].label;
-  const last = chapters[chapters.length - 1].label;
-  return chapters.length === 1 ? first : `${first}–${last} (${chapters.length} глав)`;
-}
-
-function flatArchiveEntries(chapters, series, range, meta = {}) {
-  const encoder = new TextEncoder();
-  const total = chapters.reduce((sum, chapterData) => sum + chapterData.files.length, 0);
-  const width = Math.max(4, String(total).length);
-  const entries = [];
-  const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
-  const lines = [
-    series,
-    `Диапазон: ${range}`,
-    `Глав: ${chapters.length}`,
-    `Остановлено: ${meta.stopped ? 'да' : 'нет'}`,
-    `Неполных глав: ${partialCount}`,
-    '',
-  ];
-  let page = 0;
-
-  for (const chapterData of chapters) {
-    const start = page + 1;
-    for (const file of chapterData.files) {
-      page += 1;
-      entries.push({ name: `${String(page).padStart(width, '0')}.${file.ext}`, data: file.bytes });
-    }
-    const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
-    lines.push(`${String(start).padStart(width, '0')}-${String(page).padStart(width, '0')}\t${chapterData.label}\t${chapterData.chapterName}\t${chapterData.branchLabel}${flag}`);
-  }
-
-  const writers = [...new Set(chapters.map((chapterData) => chapterData.branchLabel).filter(Boolean))].join('; ');
-  entries.push({ name: 'chapters.txt', data: encoder.encode(lines.join('\n') + '\n') });
-  entries.push({
-    name: 'ComicInfo.xml',
-    data: encoder.encode(C.buildComicInfo({
-      title: `${series} — ${range}${meta.stopped ? ' (остановлено)' : ''}`,
-      series,
-      volume: chapters[0].chapter.volume,
-      chapterNumber: range,
-      translation: writers,
-      pageCount: page,
-      source: chapters[0].source,
-      summary: lines.slice(5).join('\n'),
-    })),
-  });
-  return entries;
-}
-
-function folderedArchiveEntries(chapters, series, range, meta = {}) {
-  const encoder = new TextEncoder();
-  const total = chapters.reduce((sum, chapterData) => sum + chapterData.files.length, 0);
-  const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
-  const header = [
-    series,
-    `Диапазон: ${range}`,
-    `Глав: ${chapters.length}`,
-    `Остановлено: ${meta.stopped ? 'да' : 'нет'}`,
-    `Неполных глав: ${partialCount}`,
-    `Структура: одна папка на главу, внутри страницы и ComicInfo.xml`,
-    '',
-  ];
-  const lines = [...header];
-  const body = [];
-  const usedFolders = new Set();
-
-  chapters.forEach((chapterData, index) => {
-    const order = String(index + 1).padStart(3, '0');
-    const chapterTitle = chapterData.chapterName ? ` - ${chapterData.chapterName}` : '';
-    const partialSuffix = chapterData.partial ? ' - неполная' : '';
-    let folder = C.sanitizeComponent(`${order} - ${chapterData.label}${chapterTitle}${partialSuffix}`, 100);
-    let unique = folder;
-    let counter = 2;
-    while (usedFolders.has(unique)) unique = `${folder} (${counter++})`;
-    usedFolders.add(unique);
-
-    for (const file of chapterZipFiles(chapterData)) {
-      body.push({ name: `${unique}/${file.name}`, data: file.data });
-    }
-    const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
-    lines.push(`${unique}/\t${chapterData.label}\tстраниц: ${chapterData.files.length}\tперевод: ${chapterData.branchLabel}${flag}`);
-  });
-
-  const writers = [...new Set(chapters.map((chapterData) => chapterData.branchLabel).filter(Boolean))].join('; ');
-  const info = C.buildComicInfo({
-    title: `${series} — ${range}${meta.stopped ? ' (остановлено)' : ''}`,
-    series,
-    volume: chapters[0].chapter.volume,
-    chapterNumber: range,
-    translation: writers,
-    pageCount: total,
-    source: chapters[0].source,
-    summary: lines.slice(header.length).join('\n'),
-  });
-  return [
-    { name: 'ComicInfo.xml', data: encoder.encode(info) },
-    { name: 'chapters.txt', data: encoder.encode(lines.join('\n') + '\n') },
-    ...body,
-  ];
-}
-
-function nestedArchiveEntries(chapters, series, range, meta = {}) {
-  const encoder = new TextEncoder();
-  const entries = [];
-  const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
-  const lines = [
-    series,
-    `Диапазон: ${range}`,
-    `Глав: ${chapters.length}`,
-    `Остановлено: ${meta.stopped ? 'да' : 'нет'}`,
-    `Неполных глав: ${partialCount}`,
-    '',
-  ];
-  for (const chapterData of chapters) {
-    const name = `${C.sanitizeComponent(chapterData.base, 90)}.cbz`;
-    entries.push({ name, data: C.buildZipBytes(chapterZipFiles(chapterData)) });
-    const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
-    lines.push(`${name}\t${chapterData.label}\tстраниц: ${chapterData.files.length}\tперевод: ${chapterData.branchLabel}${flag}`);
-  }
-  entries.push({ name: 'chapters.txt', data: encoder.encode(lines.join('\n') + '\n') });
-  return entries;
-}
-
 async function saveBatchArchive(chapters, options, meta = {}) {
   if (!chapters.length) throw new Error('Нет глав для общего архива.');
   const root = chapters[0].root;
   const series = chapters[0].series;
-  const range = batchRangeLabel(chapters);
+  const range = C.batchRangeLabel(chapters);
   const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
   const suffix = `${meta.stopped ? ' - остановлено' : ''}${partialCount ? ' - есть неполные главы' : ''}`;
   const base = C.sanitizeComponent(`${series} - ${range}${suffix}`, 110);
@@ -1170,15 +1097,15 @@ async function saveBatchArchive(chapters, options, meta = {}) {
   let filename;
   let type;
   if (options.format === 'single-cbz-folders') {
-    files = folderedArchiveEntries(chapters, series, range, meta);
+    files = C.folderedArchiveEntries(chapters, series, range, meta);
     filename = `${root}/${base}.cbz`;
     type = 'application/vnd.comicbook+zip';
   } else if (options.format === 'single-cbz') {
-    files = flatArchiveEntries(chapters, series, range, meta);
+    files = C.flatArchiveEntries(chapters, series, range, meta);
     filename = `${root}/${base}.cbz`;
     type = 'application/vnd.comicbook+zip';
   } else {
-    files = nestedArchiveEntries(chapters, series, range, meta);
+    files = C.nestedArchiveEntries(chapters, series, range, meta);
     filename = `${root}/${base}.zip`;
     type = 'application/zip';
   }
@@ -1217,6 +1144,35 @@ function onChapterClick(event, index) {
   updateSelectionCount();
 }
 
+// Shift + стрелки повторяют Shift-клик для клавиатуры.
+function onChapterKey(event) {
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+  const boxes = $$('.chapter-check');
+  const index = boxes.indexOf(event.currentTarget);
+  const next = event.key === 'ArrowUp' ? index - 1 : index + 1;
+  if (next < 0 || next >= boxes.length) return;
+  event.preventDefault();
+  boxes[next].focus();
+  if (!event.shiftKey) return;
+  if (state.lastCheckedIndex == null) {
+    state.lastCheckedIndex = index;
+    state.lastCheckedState = event.currentTarget.checked;
+  }
+  const from = Math.min(state.lastCheckedIndex, next);
+  const to = Math.max(state.lastCheckedIndex, next);
+  for (let i = from; i <= to; i++) {
+    if (boxes[i] && !boxes[i].disabled) boxes[i].checked = state.lastCheckedState;
+  }
+  updateSelectionCount();
+}
+
+// После загрузки списка фокус уходит к главам: иначе клавиатуре нужно
+// протабать все настройки, чтобы добраться до данных.
+function focusChapters() {
+  const heading = document.getElementById('chapters-heading');
+  if (heading && typeof heading.focus === 'function') heading.focus({ preventScroll: true });
+}
+
 function renderChapters() {
   const fragment = document.createDocumentFragment();
   state.chapterRows = [];
@@ -1235,8 +1191,20 @@ function renderChapters() {
     checkbox.dataset.index = String(index);
     checkbox.disabled = !chapter.available;
     checkbox.checked = index === targetIndex && chapter.available;
-    checkbox.setAttribute('aria-label', `Том ${chapter.volume}, глава ${chapter.number}`);
+    checkbox.setAttribute('aria-label', `${C.chapterLabel(chapter)}${chapter.name ? `, ${chapter.name}` : ''}${chapter.available ? '' : ', глава закрыта'}`);
     checkbox.addEventListener('click', (event) => onChapterClick(event, index));
+    checkbox.addEventListener('keydown', onChapterKey);
+
+    // Клик по всей строке переключает главу: попасть в чекбокс 16 px неудобно,
+    // а выделение десятков глав — основная операция на этой поверхности.
+    row.addEventListener('click', (event) => {
+      if (!chapter.available) return;
+      if (event.target.closest('select, a, button')) return;
+      if (event.target === checkbox) return; // штатная обработка чекбокса
+      event.preventDefault();
+      checkbox.checked = !checkbox.checked;
+      onChapterClick({ currentTarget: checkbox, shiftKey: event.shiftKey }, index);
+    });
 
     const number = document.createElement('div');
     number.className = 'chapter-num';
@@ -1263,7 +1231,7 @@ function renderChapters() {
       branchCell = select;
     } else {
       const text = document.createElement('div');
-      text.className = 'chapter-name';
+      text.className = 'chapter-branch';
       text.textContent = chapter.openBranches[0] ? chapter.openBranches[0].label : '—';
       text.title = text.textContent;
       branchCell = text;
@@ -1290,17 +1258,30 @@ function setAll(checked) {
     if (!checkbox.disabled) checkbox.checked = checked;
   }
   state.lastCheckedState = checked;
+  state.lastCheckedIndex = null;
   updateSelectionCount();
 }
 
 function applyRange() {
+  // Пустое поле раньше означало «все главы»: случайное нажатие выделяло весь тайтл.
+  if (!dom.range.value.trim()) {
+    setStatus('Укажите диапазон, например 1-10, 15, 20.5. Для всех глав есть кнопка «Выбрать все».', 'error');
+    dom.range.focus();
+    return;
+  }
   const selected = C.parseRange(dom.range.value, state.chapters);
+  if (!selected.size) {
+    setStatus('Диапазон не распознан. Пример: 1-10, 15, 20.5', 'error');
+    dom.range.focus();
+    return;
+  }
   const boxes = $$('.chapter-check');
   boxes.forEach((checkbox, index) => {
     if (!checkbox.disabled) checkbox.checked = selected.has(index);
   });
+  state.lastCheckedIndex = null;
   updateSelectionCount();
-  if (!selected.size) setStatus('Диапазон не распознан. Пример: 1-10, 15, 20.5', 'error');
+  setStatus(`Выделено глав по диапазону: ${selected.size}.`, 'ok');
 }
 
 function chosenBranch(chapter, index) {
@@ -1330,7 +1311,7 @@ async function loadTitle(input) {
   const rawInput = String(input || '').trim();
   const slug = C.parseSlug(rawInput);
   if (!slug) {
-    setStatus('Не удалось найти slug тайтла. Вставьте ссылку вида https://mangalib.me/ru/7965--chainsaw-man или https://v2.shlib.life/ru/manga/87161--san-da', 'error');
+    setStatus('Не удалось найти slug тайтла. Вставьте ссылку вида https://mangalib.me/ru/7965--chainsaw-man, https://v2.shlib.life/ru/manga/87161--san-da или https://hentailib.me/ru/manga/123--title', 'error');
     return;
   }
 
@@ -1347,6 +1328,7 @@ async function loadTitle(input) {
   state.authToken = null;
   state.siteName = site.name;
   state.rootFolder = site.rootFolder;
+  state.authHosts = [...site.authHosts];
   state.apiBases = [...site.apiBases];
   state.fallbackServers = [...site.fallbackServers];
   state.apiBase = null;
@@ -1367,7 +1349,8 @@ async function loadTitle(input) {
   dom.url.value = rawInput;
   dom.sourceLink.href = `${state.origin}/`;
   dom.sourceLink.textContent = `Открыть ${state.siteName}`;
-  dom.root.value = state.rootFolder;
+  // Введённую вручную папку не затираем при смене тайтла или сайта.
+  if (!state.rootEdited) dom.root.value = state.rootFolder;
   updateSiteBadge();
   updateApiHost();
   dom.workspace.hidden = true;
@@ -1391,13 +1374,16 @@ async function loadTitle(input) {
     state.chapters = C.normalizeChapters(raw);
     updateTitleCard();
     renderChapters();
-    dom.workspace.hidden = false;
+    // Пустой список не должен притворяться рабочей областью с активным «Скачать».
+    dom.workspace.hidden = state.chapters.length === 0;
+    updateStartState();
     if (!state.chapters.length) {
       setStatus('У тайтла нет доступных глав в публичном API — возможно, он лицензирован или скрыт.', 'error');
     } else {
       const open = state.chapters.filter((chapter) => chapter.available).length;
-      setStatus(`Загружено глав: ${state.chapters.length}. Доступно: ${open}.`, 'ok');
-      if (state.readTarget) addLog(`Из адреса читалки определена глава т${state.readTarget.volume} гл${state.readTarget.number}.`, 'info');
+      setStatus(`Загружено глав: ${state.chapters.length}. Доступно: ${open}.`, `ok`);
+      if (state.readTarget) addLog(`Из адреса читалки определена глава ${C.chapterLabel({ volume: state.readTarget.volume, number: state.readTarget.number })}.`, 'info');
+      focusChapters();
     }
 
     // Не блокируем интерфейс метаданными и CDN: это второстепенные запросы.
@@ -1408,7 +1394,7 @@ async function loadTitle(input) {
         updateTitleCard();
       })
       .catch(() => {});
-    loadImageServers().catch(() => {});
+    loadImageServers().catch((err) => addLog(`CDN: ${humanError(err)}`, 'info'));
   } catch (err) {
     if (state.loadId !== loadId || isAbort(err)) return;
     if (err.notFound) {
@@ -1479,7 +1465,14 @@ async function startDownload() {
   let packError = null;
 
   try {
+    // Список CDN приходит из /constants и может содержать новые хосты, поэтому
+    // проверка прав идёт после него, а не только по клику на «Скачать».
     await loadImageServers(controller.signal);
+    try {
+      await checkHostAccess();
+    } catch (err) {
+      addLog(`Проверка доступа: ${humanError(err)}`, 'info');
+    }
     try {
       await ensureRefererRules();
     } catch (err) {
@@ -1592,6 +1585,41 @@ async function startDownload() {
   }
 }
 
+// ---------- Сохранённые настройки ----------
+
+const SETTINGS_KEY = 'libdl.settings.v1';
+
+async function loadSettings() {
+  if (!chrome.storage || !chrome.storage.local) return;
+  try {
+    const stored = await chrome.storage.local.get(SETTINGS_KEY);
+    const saved = stored && stored[SETTINGS_KEY];
+    if (!saved || typeof saved !== 'object') return;
+    if (saved.format && dom.format.querySelector(`option[value="${saved.format}"]`)) dom.format.value = saved.format;
+    if (saved.speed && dom.speed.querySelector(`option[value="${saved.speed}"]`)) dom.speed.value = saved.speed;
+    if (saved.root) {
+      dom.root.value = saved.root;
+      state.rootFolder = saved.root;
+      state.rootEdited = true;
+    }
+    state.settingsLoaded = true;
+  } catch (err) {
+    addLog(`Настройки не прочитаны: ${humanError(err)}`, 'info');
+  }
+}
+
+function saveSettings() {
+  if (!chrome.storage || !chrome.storage.local) return;
+  const payload = {
+    format: dom.format.value,
+    speed: dom.speed.value,
+    root: state.rootEdited ? dom.root.value.trim() : '',
+  };
+  chrome.storage.local.set({ [SETTINGS_KEY]: payload }).catch((err) => {
+    addLog(`Настройки не сохранены: ${humanError(err)}`, 'info');
+  });
+}
+
 // ---------- События ----------
 
 dom.form.addEventListener('submit', (event) => {
@@ -1606,12 +1634,20 @@ dom.range.addEventListener('keydown', (event) => {
     applyRange();
   }
 });
+dom.format.addEventListener('change', saveSettings);
+dom.speed.addEventListener('change', saveSettings);
+dom.root.addEventListener('input', () => {
+  state.rootEdited = true;
+  state.rootFolder = dom.root.value.trim() || state.rootFolder;
+});
+dom.root.addEventListener('change', saveSettings);
 dom.selectAll.addEventListener('click', () => setAll(true));
 dom.selectNone.addEventListener('click', () => setAll(false));
 dom.start.addEventListener('click', () => {
   requestHostAccess();
   startDownload();
 });
+dom.list.addEventListener('change', updateSelectionCount);
 dom.stop.addEventListener('click', () => {
   if (state.controller) {
     state.controller.abort();
@@ -1623,6 +1659,12 @@ dom.rules.addEventListener('click', () => {
   Promise.all([ensureRefererRules(), state.accessPromise])
     .then(() => setStatus('Доступ к API/CDN и заголовок Referer обновлены.', 'ok'))
     .catch((err) => setStatus(humanError(err), 'error'));
+  missingOrigins()
+    .then((missing) => {
+      if (missing.length) addLog(`Всё ещё нет доступа: ${missing.join(', ')}.`, 'err');
+      else addLog('Все нужные хосты разрешены.', 'ok');
+    })
+    .catch(() => {});
 });
 window.addEventListener('beforeunload', (event) => {
   if (state.running) {
@@ -1653,6 +1695,8 @@ async function init() {
     state.sourceTabId = tabId;
     state.bridgeTabId = tabId;
   }
+  await loadSettings();
+  updateStartState();
   ensureRefererRules().catch((err) => addLog(`DNR: ${humanError(err)}`, 'err'));
   if (url) {
     dom.url.value = url;

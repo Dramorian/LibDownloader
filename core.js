@@ -28,6 +28,8 @@
         'https://img3.cdnrulib.link',
         'https://img2.imglib.info',
       ],
+      // Bearer-токен сайта уходит только на эти хосты (см. buildApiHeaders).
+      authHosts: ['api.cdnlibs.org', 'api.lib.social'],
     },
     slash: {
       key: 'slash',
@@ -48,6 +50,28 @@
         'https://img3.cdnrulib.link',
         'https://img2.hentaicdn.org',
       ],
+      authHosts: ['api.shlib.life', 'api.cdnlibs.org', 'api.lib.social'],
+    },
+    hentai: {
+      key: 'hentai',
+      name: 'HentaiLib',
+      // Тот же бэкенд, что у MangaLib; отличаются только Site-Id, origin и CDN.
+      siteId: '4',
+      host: /(?:^|\.)hentailib\.(?:me|org)$/i,
+      defaultOrigin: 'https://hentailib.me',
+      rootFolder: 'HentaiLib',
+      apiBases: [
+        'https://api.cdnlibs.org/api',
+        'https://api.lib.social/api',
+        'https://api2.mangalib.me/api',
+      ],
+      fallbackServers: [
+        'https://img3.hentaicdn.org',
+        'https://img3.cdnlibs.org',
+        'https://img3.cdnrulib.link',
+        'https://img2.hentaicdn.org',
+      ],
+      authHosts: ['api.cdnlibs.org', 'api.lib.social'],
     },
   };
   const SITE_NAMES = {
@@ -62,11 +86,13 @@
     'shlib.life', 'v2.shlib.life', 'www.shlib.life', 'v1.shlib.life',
     'yaoilib.net', 'v1.yaoilib.net', 'www.yaoilib.net',
     'slashlib.me', 'www.slashlib.me', 'slashlib.org', 'www.slashlib.org',
+    'hentailib.me', 'www.hentailib.me', 'hentailib.org', 'www.hentailib.org',
   ];
   const SITE_DNR_DOMAINS = [
     'mangalib.me', 'mangalib.org', 'cdnlibs.org', 'lib.social', 'imglib.info',
-    'cdnrulib.link', 'shlib.life', 'hentaicdn.org',
-    'api.shlib.life', 'hapi.hentaicdn.org', 'img2.hentaicdn.org', 'img3.hentaicdn.org',
+    'cdnrulib.link', 'shlib.life', 'hentaicdn.org', 'hentailib.me', 'hentailib.org',
+    'api.shlib.life', 'api2.mangalib.me', 'hapi.hentaicdn.org',
+    'img2.hentaicdn.org', 'img3.hentaicdn.org',
   ];
   const MIME_BY_EXT = {
     jpg: 'image/jpeg',
@@ -96,6 +122,29 @@
     return null;
   }
 
+  // Профиль по числовому Site-Id: нужен после 404-фолбэка, когда API нашёл тайтл
+  // на соседнем сайте сети. Для 3/5 профиля нет — это текстовые/аниме-сайты.
+  function profileBySiteId(siteId) {
+    const id = String(siteId ?? '');
+    const found = Object.values(SITE_PROFILES).find((site) => site.siteId === id);
+    return found ? { ...found } : null;
+  }
+
+  // Заголовки запроса к API. Токен пользователя отправляется только на хосты,
+  // перечисленные в profile.authHosts: запасные CDN и чужие API его не получают.
+  function buildApiHeaders(options) {
+    const o = options || {};
+    const headers = {
+      Accept: 'application/json',
+      'Site-Id': String(o.siteId != null ? o.siteId : ''),
+    };
+    const authHosts = Array.isArray(o.authHosts) ? o.authHosts : [];
+    let host = '';
+    try { host = new URL(String(o.url || '')).hostname; } catch (_) { host = ''; }
+    if (o.token && host && authHosts.includes(host)) headers.Authorization = `Bearer ${o.token}`;
+    return headers;
+  }
+
   function isSupportedHost(hostname) {
     const value = String(hostname || '');
     return Object.values(SITE_PROFILES).some((site) => site.host.test(value));
@@ -120,7 +169,9 @@
     if (!raw) return null;
     try {
       const url = new URL(raw);
-      if (!isSupportedHost(url.hostname) && url.protocol.startsWith('http')) return null;
+      // Схема важна: javascript:/data:/ftp: не должны превращаться в slug.
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+      if (!isSupportedHost(url.hostname)) return null;
       const parts = url.pathname.split('/').filter(Boolean).map((part) => {
         try { return decodeURIComponent(part); } catch (_) { return part; }
       });
@@ -132,7 +183,7 @@
       return candidate || null;
     } catch (_) {
       // Разрешаем вручную ввести только сам slug вида "7965--chainsaw-man".
-      if (/^[\w%.-]+--[\w%.-]+$/.test(raw) && !/[\/\\]/.test(raw)) return raw;
+      if (/^[\w%.-]+--[\w%.-]+$/.test(raw) && !/[\/\\:]/.test(raw)) return raw;
       return null;
     }
   }
@@ -200,6 +251,8 @@
   function padNumber(value, width) {
     const w = Math.max(1, Number(width) || 4);
     const text = String(value ?? '').trim();
+    // Пустой том — это «тома нет», а не «_manga»: такой ярлык попадал в имена папок.
+    if (!text) return '';
     const parts = text.split('.');
     if (!/^\d+$/.test(parts[0])) return sanitizeComponent(text, 32);
     const head = parts[0].padStart(w, '0');
@@ -260,7 +313,9 @@
   }
 
   function chapterLabel(chapter) {
-    return `т${padNumber(chapter.volume, 2)} гл${padNumber(chapter.number, 4)}`;
+    const volume = padNumber(chapter.volume, 2);
+    const number = padNumber(chapter.number, 4);
+    return volume ? `т${volume} гл${number}` : `гл${number}`;
   }
 
   function findChapterIndex(chapters, target) {
@@ -343,14 +398,15 @@
 
   function buildComicInfo(options) {
     const o = options || {};
-    const title = o.title || o.chapterName || `Глава ${o.chapterNumber}`;
+    const chapterNumber = o.chapterNumber == null ? '' : String(o.chapterNumber).trim();
+    const title = o.title || o.chapterName || (chapterNumber ? `Глава ${chapterNumber}` : 'Глава');
     const lines = [
       '<?xml version="1.0" encoding="utf-8"?>',
       '<ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
       `  <Title>${xmlEscape(title)}</Title>`,
       `  <Series>${xmlEscape(o.series || '')}</Series>`,
       `  <Volume>${xmlEscape(o.volume || '')}</Volume>`,
-      `  <Number>${xmlEscape(o.chapterNumber || '')}</Number>`,
+      `  <Number>${xmlEscape(chapterNumber)}</Number>`,
       `  <Writer>${xmlEscape(o.translation || '')}</Writer>`,
       `  <PageCount>${Number(o.pageCount) || 0}</PageCount>`,
       '  <LanguageISO>ru</LanguageISO>',
@@ -403,8 +459,15 @@
     return out;
   }
 
-  // Байты ZIP без обёртки в Blob: нужны, чтобы положить CBZ глав внутрь общего ZIP.
-  function buildZipBytes(files) {
+  // ZIP32: больше 65535 записей или 4 ГиБ адресного пространства формат не описывает.
+  const ZIP_MAX_ENTRIES = 0xffff;
+  const ZIP_MAX_BYTES = 0xffffffff;
+
+  // Части ZIP без склейки: Blob собирается из них напрямую, лишняя полная копия не нужна.
+  function buildZipParts(files) {
+    if (files.length > ZIP_MAX_ENTRIES) {
+      throw new Error(`Слишком много файлов для ZIP: ${files.length} (максимум ${ZIP_MAX_ENTRIES}). Качайте частями.`);
+    }
     const encoder = new TextEncoder();
     const { time, date } = dosDateTime(new Date());
     const localParts = [];
@@ -452,6 +515,9 @@
       centralParts.push(new Uint8Array(central.buffer), name);
 
       offset += 30 + name.length + size;
+      if (offset > ZIP_MAX_BYTES) {
+        throw new Error('Архив больше 4 ГиБ: формат ZIP32 не поддерживает такие размеры. Качайте частями.');
+      }
     }
 
     const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
@@ -462,17 +528,212 @@
     end.setUint32(12, centralSize, true);
     end.setUint32(16, offset, true);
 
-    return concatBytes([...localParts, ...centralParts, new Uint8Array(end.buffer)]);
+    return [...localParts, ...centralParts, new Uint8Array(end.buffer)];
+  }
+
+  // Байты ZIP без обёртки в Blob: нужны, чтобы положить CBZ глав внутрь общего ZIP.
+  function buildZipBytes(files) {
+    return concatBytes(buildZipParts(files));
   }
 
   function buildZip(files, options) {
     const type = (options && options.type) || 'application/vnd.comicbook+zip';
-    return new Blob([buildZipBytes(files)], { type });
+    return new Blob(buildZipParts(files), { type });
   }
 
   function titleName(data, fallback) {
     const d = (data && data.data && typeof data.data === 'object') ? data.data : (data || {});
     return String(d.rus_name || d.name || d.eng_name || fallback || 'Манга').trim();
+  }
+
+
+  // ---- Наборы файлов для архивов. Чистые функции: их проверяют тесты, а не UI. ----
+
+  function chapterZipFiles(chapterData) {
+    const files = chapterData.files.map((file) => ({ name: file.name, data: file.bytes }));
+    files.push({
+      name: 'ComicInfo.xml',
+      data: new TextEncoder().encode(buildComicInfo({
+        chapterName: chapterData.partial ? `${chapterData.chapterName} (неполная)` : chapterData.chapterName,
+        series: chapterData.series,
+        volume: chapterData.chapter.volume,
+        chapterNumber: chapterData.chapter.number,
+        translation: chapterData.branchLabel,
+        pageCount: chapterData.files.length,
+        source: chapterData.source,
+      })),
+    });
+    return files;
+  }
+
+  // Переиндексация страниц неполной главы: дыр в нумерации быть не должно.
+  function reindexFiles(files) {
+    const width = Math.max(3, String(files.length).length);
+    return files.map((file, index) => ({
+      ...file,
+      name: `${String(index + 1).padStart(width, '0')}.${file.ext}`,
+    }));
+  }
+
+  function sortedPages(pages) {
+    return pages.map((page, index) => ({ page, index })).sort((a, b) => {
+      const an = Number(a.page.slug);
+      const bn = Number(b.page.slug);
+      if (Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+      return a.index - b.index;
+    }).map((entry) => entry.page);
+  }
+
+  function batchRangeLabel(chapters) {
+    const first = chapters[0].label;
+    const last = chapters[chapters.length - 1].label;
+    return chapters.length === 1 ? first : `${first}–${last} (${chapters.length} глав)`;
+  }
+
+  // Одинаковые имена после обрезки до 90–110 символов не должны перетирать друг друга.
+  function uniqueEntryName(name, used) {
+    let unique = name;
+    let counter = 2;
+    while (used.has(unique)) {
+      const dot = name.lastIndexOf('.');
+      unique = dot > 0
+        ? `${name.slice(0, dot)} (${counter++}).${name.slice(dot + 1)}`
+        : `${name} (${counter++})`;
+    }
+    used.add(unique);
+    return unique;
+  }
+
+  function archiveWriters(chapters) {
+    return [...new Set(chapters.map((chapterData) => chapterData.branchLabel).filter(Boolean))].join('; ');
+  }
+
+  // Общий том для ComicInfo: если главы из разных томов, поле остаётся пустым.
+  function sharedVolume(chapters) {
+    const volumes = [...new Set(chapters.map((chapterData) => String(chapterData.chapter.volume ?? '')))];
+    return volumes.length === 1 ? volumes[0] : '';
+  }
+
+  function batchComicInfo(chapters, series, range, meta, extra) {
+    const o = extra || {};
+    return buildComicInfo({
+      title: `${series} — ${range}${meta.stopped ? ' (остановлено)' : ''}`,
+      series,
+      volume: sharedVolume(chapters),
+      chapterNumber: chapters[0] ? chapters[0].chapter.number : '',
+      translation: archiveWriters(chapters),
+      pageCount: o.pageCount || 0,
+      source: chapters[0] ? chapters[0].source : '',
+      summary: o.summary || '',
+    });
+  }
+
+  function flatArchiveEntries(chapters, series, range, meta) {
+    const options = meta || {};
+    const encoder = new TextEncoder();
+    const total = chapters.reduce((sum, chapterData) => sum + chapterData.files.length, 0);
+    const width = Math.max(4, String(total).length);
+    const entries = [];
+    const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
+    const header = [
+      series,
+      `Диапазон: ${range}`,
+      `Глав: ${chapters.length}`,
+      `Остановлено: ${options.stopped ? 'да' : 'нет'}`,
+      `Неполных глав: ${partialCount}`,
+      '',
+    ];
+    let page = 0;
+
+    for (const chapterData of chapters) {
+      const start = page + 1;
+      for (const file of chapterData.files) {
+        page += 1;
+        entries.push({ name: `${String(page).padStart(width, '0')}.${file.ext}`, data: file.bytes });
+      }
+      const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
+      header.push(`${String(start).padStart(width, '0')}-${String(page).padStart(width, '0')}\t${chapterData.label}\t${chapterData.chapterName}\t${chapterData.branchLabel}${flag}`);
+    }
+
+    entries.push({ name: 'chapters.txt', data: encoder.encode(header.join('\n') + '\n') });
+    entries.push({
+      name: 'ComicInfo.xml',
+      data: encoder.encode(batchComicInfo(chapters, series, range, options, {
+        pageCount: page,
+        summary: header.slice(6).join('\n'),
+      })),
+    });
+    return entries;
+  }
+
+  function folderedArchiveEntries(chapters, series, range, meta) {
+    const options = meta || {};
+    const encoder = new TextEncoder();
+    const total = chapters.reduce((sum, chapterData) => sum + chapterData.files.length, 0);
+    const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
+    const header = [
+      series,
+      `Диапазон: ${range}`,
+      `Глав: ${chapters.length}`,
+      `Остановлено: ${options.stopped ? 'да' : 'нет'}`,
+      `Неполных глав: ${partialCount}`,
+      'Структура: одна папка на главу, внутри страницы и ComicInfo.xml',
+      '',
+    ];
+    const lines = [...header];
+    const body = [];
+    const usedFolders = new Set();
+
+    chapters.forEach((chapterData, index) => {
+      const order = String(index + 1).padStart(3, '0');
+      const chapterTitle = chapterData.chapterName ? ` - ${chapterData.chapterName}` : '';
+      const partialSuffix = chapterData.partial ? ' - неполная' : '';
+      const wanted = sanitizeComponent(`${order} - ${chapterData.label}${chapterTitle}${partialSuffix}`, 100);
+      let folder = wanted;
+      let counter = 2;
+      while (usedFolders.has(folder)) folder = `${wanted} (${counter++})`;
+      usedFolders.add(folder);
+
+      for (const file of chapterZipFiles(chapterData)) {
+        body.push({ name: `${folder}/${file.name}`, data: file.data });
+      }
+      const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
+      lines.push(`${folder}/\t${chapterData.label}\tстраниц: ${chapterData.files.length}\tперевод: ${chapterData.branchLabel}${flag}`);
+    });
+
+    const info = batchComicInfo(chapters, series, range, options, {
+      pageCount: total,
+      summary: lines.slice(header.length).join('\n'),
+    });
+    return [
+      { name: 'ComicInfo.xml', data: encoder.encode(info) },
+      { name: 'chapters.txt', data: encoder.encode(lines.join('\n') + '\n') },
+      ...body,
+    ];
+  }
+
+  function nestedArchiveEntries(chapters, series, range, meta) {
+    const options = meta || {};
+    const encoder = new TextEncoder();
+    const entries = [];
+    const used = new Set();
+    const partialCount = chapters.filter((chapterData) => chapterData.partial).length;
+    const lines = [
+      series,
+      `Диапазон: ${range}`,
+      `Глав: ${chapters.length}`,
+      `Остановлено: ${options.stopped ? 'да' : 'нет'}`,
+      `Неполных глав: ${partialCount}`,
+      '',
+    ];
+    for (const chapterData of chapters) {
+      const name = uniqueEntryName(`${sanitizeComponent(chapterData.base, 90)}.cbz`, used);
+      entries.push({ name, data: buildZipBytes(chapterZipFiles(chapterData)) });
+      const flag = chapterData.partial ? '\tНЕПОЛНАЯ' : '';
+      lines.push(`${name}\t${chapterData.label}\tстраниц: ${chapterData.files.length}\tперевод: ${chapterData.branchLabel}${flag}`);
+    }
+    entries.push({ name: 'chapters.txt', data: encoder.encode(lines.join('\n') + '\n') });
+    return entries;
   }
 
   const api = {
@@ -509,11 +770,24 @@
     xmlEscape,
     buildComicInfo,
     crc32,
+    ZIP_MAX_ENTRIES,
+    buildZipParts,
     buildZipBytes,
     buildZip,
     titleName,
+    profileBySiteId,
+    buildApiHeaders,
+    chapterZipFiles,
+    reindexFiles,
+    sortedPages,
+    batchRangeLabel,
+    uniqueEntryName,
+    flatArchiveEntries,
+    folderedArchiveEntries,
+    nestedArchiveEntries,
   };
 
+  // always publish: background.js импортирует этот файл как ES-модуль и берёт MLCore
+  root.MLCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  else root.MLCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

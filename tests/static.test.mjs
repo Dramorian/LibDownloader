@@ -12,23 +12,32 @@ const exists = (rel) => fs.existsSync(path.join(root, rel));
 test('manifest.json: корректный MV3 и все файлы на месте', () => {
   const manifest = JSON.parse(read('manifest.json'));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '1.6.0');
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/, 'версия в формате x.y.z');
+  assert.ok(Number(manifest.version.split('.')[0]) >= 1);
   assert.match(manifest.name, /SlashLib/);
+  assert.match(manifest.name, /HentaiLib/);
   assert.equal(manifest.background.service_worker, 'background.js');
+  assert.equal(manifest.background.type, 'module', 'service worker импортирует core.js');
   assert.ok(exists('background.js'));
   assert.equal(manifest.options_page, 'app.html');
   assert.ok(exists('app.html'));
   assert.ok(exists('app.css'));
   assert.ok(exists('core.js'));
   assert.ok(exists('app.js'));
-  for (const permission of ['downloads', 'scripting', 'tabs', 'declarativeNetRequestWithHostAccess']) {
+  for (const permission of ['downloads', 'scripting', 'tabs', 'storage', 'declarativeNetRequestWithHostAccess']) {
     assert.ok(manifest.permissions.includes(permission), `нет permission ${permission}`);
   }
   assert.ok(manifest.optional_host_permissions.includes('https://*/*'));
   for (const pattern of manifest.host_permissions) {
     assert.match(pattern, /^https:\/\/[^*]+\/\*$|^https:\/\/\*\.[^*/]+\/\*$/);
   }
-  for (const required of ['https://*.shlib.life/*', 'https://*.hentaicdn.org/*', 'https://*.cdnlibs.org/*']) {
+  for (const required of [
+    'https://*.shlib.life/*',
+    'https://*.hentaicdn.org/*',
+    'https://*.cdnlibs.org/*',
+    'https://*.hentailib.me/*',
+    'https://*.hentailib.org/*',
+  ]) {
     assert.ok(manifest.host_permissions.includes(required), `нет host permission ${required}`);
   }
   assert.doesNotMatch(manifest.content_security_policy.extension_pages, /unsafe-inline|unsafe-eval/);
@@ -54,17 +63,25 @@ test('app.html: все #id из app.js существуют, ресурсы ло
   assert.ok(used.length > 20);
   for (const id of used) assert.ok(ids.has(id), `app.js использует отсутствующий #${id}`);
   for (const id of ['site-select', 'site-badge', 'suggestions']) assert.ok(ids.has(id), `нет #${id}`);
-  assert.match(app, /function makeApiHeaders\(/);
-  assert.match(app, /Authorization.*Bearer/, 'нужен Bearer-токен для 18+ тайтлов');
+  assert.match(app, /function apiHeadersFor\(/);
+  assert.match(app, /C\.buildApiHeaders\(/, 'заголовки собирает core.js: токен не уходит на все хосты');
+  assert.match(read('core.js'), /Authorization.*Bearer/, 'нужен Bearer-токен для 18+ тайтлов');
+  assert.match(read('core.js'), /authHosts/, 'токен ограничен хостами профиля');
   assert.match(app, /readPageContext/);
   assert.match(app, /fetchChaptersWithFallback/);
   assert.match(app, /collectChapterFiles/);
   assert.match(app, /saveBatchArchive/);
+  assert.match(app, /C\.flatArchiveEntries/);
+  assert.match(app, /C\.nestedArchiveEntries/);
   assert.match(app, /abortWithPartial/);
   assert.match(app, /partialChapterData/);
-  assert.match(app, /НЕПОЛНАЯ/);
-  assert.match(app, /folderedArchiveEntries/);
-  assert.match(app, /C\.buildZipBytes/);
+  assert.match(read('core.js'), /НЕПОЛНАЯ/);
+  assert.match(app, /C\.folderedArchiveEntries/);
+  assert.match(read('core.js'), /function buildZipBytes\(/, 'вложенный CBZ собирается из байтов ZIP');
+  assert.match(app, /C\.buildZip\(/);
+  for (const site of ['manga', 'slash', 'hentai']) {
+    assert.match(html, new RegExp(`<option value="${site}">`), `нет сайта ${site} в списке`);
+  }
   for (const value of ['single-cbz-folders', 'single-cbz', 'single-zip', 'cbz', 'images', 'both']) {
     assert.match(html, new RegExp(`value="${value}"`), `нет формата ${value}`);
   }
@@ -72,6 +89,11 @@ test('app.html: все #id из app.js существуют, ресурсы ло
   assert.match(html, /частичный архив/, 'нужно предупреждение о частичном архиве при остановке');
   assert.doesNotMatch(app, /['"]Site-Id['"]\s*:\s*['"]\d['"]/, 'Site-Id должен браться из state.siteId');
   assert.match(read('core.js'), /api\.shlib\.life/);
+  assert.match(read('core.js'), /hentailib/, 'домен HentaiLib в профиле');
+  assert.match(read('core.js'), /siteId: '4'/, 'HentaiLib — Site-Id 4');
+  assert.match(read('manifest.json'), /hentailib/, 'домен HentaiLib в host_permissions');
+  assert.match(read('background.js'), /import '\.\/core\.js'/, 'списки доменов не дублируются');
+  assert.match(read('app.js'), /apiHeadersFor\(url/, 'токен привязан к конкретному URL');
   assert.match(read('core.js'), /slugToSearchQueries/);
 
   const refs = [...html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"/g)].map((m) => m[1]);
