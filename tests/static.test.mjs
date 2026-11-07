@@ -86,6 +86,10 @@ test('app.html: все #id из app.js существуют, ресурсы ло
     assert.match(html, new RegExp(`value="${value}"`), `нет формата ${value}`);
   }
   assert.match(html, /value="single-cbz-folders" selected/, 'CBZ с папками по главам должен быть форматом по умолчанию');
+  for (const [cls, label] of [['head-num', 'Том, глава'], ['head-name', 'Название'], ['head-branch', 'Перевод'], ['head-badge', 'Статус']]) {
+    assert.match(html, new RegExp(`class="${cls}">${label}<`), `нет подписи колонки ${label}`);
+  }
+  assert.ok(html.indexOf('chapter-head') < html.indexOf('id="chapter-list"'), 'шапка таблицы идёт до списка глав');
   assert.match(html, /частичный архив/, 'нужно предупреждение о частичном архиве при остановке');
   assert.doesNotMatch(app, /['"]Site-Id['"]\s*:\s*['"]\d['"]/, 'Site-Id должен браться из state.siteId');
   assert.match(read('core.js'), /api\.shlib\.life/);

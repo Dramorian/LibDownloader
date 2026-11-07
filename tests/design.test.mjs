@@ -57,8 +57,14 @@ test(' craft floor: contrast, touch targets, motion and responsive states', () =
   assert.match(css, /\.chapter-row\.unavailable \.chapter-name/);
   assert.doesNotMatch(css, /\.chapter-row\.unavailable\s*\{[^}]*opacity/, 'закрытые главы гасим цветом, а не прозрачностью');
   assert.match(css, /min-height:\s*40px/, 'тач-таргеты не меньше 40px');
-  assert.match(css, /grid-template-areas: "check num name branch badge"/);
-  assert.match(css, /grid-template-areas: "check num name badge" "check num branch branch"/, 'мобильная строка — две строки, без висящего бейджа');
+  // Шапка таблицы и строки глав используют одну и ту же сетку из переменных,
+  // иначе подписи колонок разъезжаются с данными.
+  assert.match(css, /--chapter-columns:\s*28px 108px/);
+  assert.match(css, /--chapter-areas:\s*"check num name branch badge"/);
+  assert.match(css, /\.chapter-head,\s*\n\.chapter-row \{[^}]*grid-template-columns: var\(--chapter-columns\)/);
+  assert.match(css, /--chapter-areas:\s*"check num name badge" "check num branch branch"/, 'мобильная строка — две строки, без висящего бейджа');
+  assert.match(css, /\.chapter-head > \.head-badge \{ grid-area: badge; \}/);
+  assert.match(css, /\.chapter-head \{[^}]*color: var\(--muted\)/);
   assert.doesNotMatch(css, /repeat\(auto-fill/, 'подсказки — список, а не сетка карточек');
   assert.match(css, /::selection/);
   assert.match(css, /caret-color/);
